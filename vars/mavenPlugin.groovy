@@ -46,6 +46,21 @@ def call(Map config = [:]) {
     // make the escape hatch above a lie.
     String mavenTool    = config.containsKey('maven') ? config.maven : '3.8.1'
     String nexusCredId  = config.get('nexusCredentials', 'nexus-deploy')
+    // Deploy targets are supplied here rather than read from each project's
+    // <distributionManagement>, because they are a property of this CI setup,
+    // not of the source tree. Two concrete reasons:
+    //
+    //   1. Half the bwmp plugins declare distributionManagement and half do
+    //      not, so relying on it makes deployment work per-repo by accident.
+    //   2. keystone-parent is deliberately standalone - consuming plugins
+    //      inherit from it - so putting bwmp's Nexus URLs in it would hand a
+    //      deploy target to every downstream consumer of a public framework.
+    //
+    // The id MUST match the <server> id writeNexusSettings writes, or Maven
+    // finds no credentials for the repository and the upload 401s.
+    String repoServerId = config.get('repoServerId', 'nexus-site')
+    String snapshotRepo = config.get('snapshotRepo', 'https://nexus.bwmp.dev/repository/maven-snapshots/')
+    String releaseRepo  = config.get('releaseRepo',  'https://nexus.bwmp.dev/repository/maven-releases/')
     String artifacts    = config.get('artifacts', '**/target/*.jar')
     String excludes     = config.get('excludes', '**/original-*.jar')
     Map    verify       = config.get('verify', null)
@@ -89,7 +104,9 @@ def call(Map config = [:]) {
                     // ${env.*}, which Maven expands at run time, and those
                     // variables exist only inside the withCredentials blocks
                     // around the deploy steps.
-                    writeNexusSettings()
+                    // Passed explicitly so the server id and the id in
+                    // altDeploymentRepository cannot drift apart.
+                    writeNexusSettings(serverId: repoServerId)
                 }
             }
 
@@ -128,12 +145,33 @@ def call(Map config = [:]) {
                         // version between releases, so deploying as-is would
                         // try to republish something already public. Suffixing
                         // here keeps -SNAPSHOT out of git entirely.
-                        sh '''
-                            VERSION=$(mvn $MAVEN_ARGS -q -DforceStdout help:evaluate -Dexpression=project.version)
-                            mvn $MAVEN_ARGS versions:set -DnewVersion="${VERSION}-SNAPSHOT" \
-                                -DprocessAllModules=true -DgenerateBackupPoms=false
-                            mvn $MAVEN_ARGS deploy -DskipTests
-                        '''
+                        //
+                        // The case guard makes that idempotent. A project that
+                        // has not had its first release yet still has
+                        // -SNAPSHOT in the poms, and appending unconditionally
+                        // produced `0.1.0-SNAPSHOT-SNAPSHOT` - which Maven
+                        // treats as a snapshot and happily deploys, so the
+                        // damage is a junk version in Nexus rather than a
+                        // build failure. Check, do not assume.
+                        //
+                        // ::default:: is the layout token maven-deploy-plugin
+                        // 2.7 requires in altDeploymentRepository; omitting it
+                        // fails to parse.
+                        sh """
+                            set -e
+                            VERSION=\$(mvn \$MAVEN_ARGS -q -DforceStdout help:evaluate -Dexpression=project.version)
+                            case "\$VERSION" in
+                                *-SNAPSHOT)
+                                    echo "Poms are already at \$VERSION - not re-suffixing."
+                                    ;;
+                                *)
+                                    mvn \$MAVEN_ARGS versions:set -DnewVersion="\${VERSION}-SNAPSHOT" \\
+                                        -DprocessAllModules=true -DgenerateBackupPoms=false
+                                    ;;
+                            esac
+                            mvn \$MAVEN_ARGS deploy -DskipTests \\
+                                -DaltDeploymentRepository='${repoServerId}::default::${snapshotRepo}'
+                        """
                     }
                 }
             }
@@ -150,7 +188,8 @@ def call(Map config = [:]) {
                             credentialsId: nexusCredId,
                             usernameVariable: 'NEXUS_USER',
                             passwordVariable: 'NEXUS_PASS')]) {
-                        sh 'mvn $MAVEN_ARGS deploy -DskipTests'
+                        sh "mvn \$MAVEN_ARGS deploy -DskipTests " +
+                           "-DaltDeploymentRepository='${repoServerId}::default::${releaseRepo}'"
                     }
                 }
             }

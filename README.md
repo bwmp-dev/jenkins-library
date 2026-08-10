@@ -36,13 +36,18 @@ Everything is optional; a single-module plugin needs only `mavenPlugin()`.
 | `jdk` | `Java 25` | Jenkins JDK tool name. Must be >= the newest class file version on the compile classpath — paper-api 26.x is Java 25 — regardless of the `--release` level the project targets. |
 | `maven` | `3.8.1` | Jenkins Maven tool name; `null` to use `mvn` from the agent's PATH |
 | `nexusCredentials` | `nexus-deploy` | Jenkins credential ID for the Nexus deploy account |
+| `repoServerId` | `nexus-site` | Maven server id; must match the `<server>` id in the generated settings.xml |
+| `snapshotRepo` | `.../maven-snapshots/` | snapshot deploy URL, passed as `altDeploymentRepository` |
+| `releaseRepo` | `.../maven-releases/` | release deploy URL, passed as `altDeploymentRepository` |
 | `artifacts` | `**/target/*.jar` | what to archive |
 | `excludes` | `**/original-*.jar` | shade's pre-shading copy, never wanted |
 | `verify` | none | jar layout assertions, see below |
 | `deploy` | `true` | set false for a plugin that should never publish |
 | `releaseBranch` | `main\|master` | branches that deploy snapshots |
 
-**JDK 21 is the default even though these emit Java 17 bytecode.** `--release 17` fixes the *output* version; compiling *against* paper-api 26.x needs a compiler new enough to read its class files.
+**JDK 25 is the default even though these emit Java 17 bytecode.** `--release 17` fixes the *output* version and the platform API; it does not lower the highest class file version javac will read off the classpath. paper-api 26.1.2 ships class file version 69 (Java 25), so a Java 21 compiler fails with `class file has wrong version 69.0, should be 65.0`.
+
+**Deploy targets come from here, not from `<distributionManagement>`.** They describe this Jenkins, not the source tree — only some of the plugins declare them, and `keystone-parent` deliberately must not, since consuming plugins inherit from it. The library passes `-DaltDeploymentRepository` instead, which overrides any pom that does declare one.
 
 ### What it does
 
