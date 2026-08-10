@@ -206,6 +206,19 @@ def call(Map config = [:]) {
             }
             always {
                 junit testResults: '**/target/surefire-reports/TEST-*.xml', allowEmptyResults: true
+            }
+            // cleanup, NOT always. Declarative runs post conditions in a fixed
+            // order and `always` comes before `success`, so wiping the
+            // workspace there deletes every jar before archiveArtifacts can
+            // see one. The symptom is
+            //
+            //     'archiveArtifacts: No artifacts found that match the file
+            //      pattern "**/target/*.jar". Configuration error?'
+            //
+            // on a build whose every stage passed, which reads like a bad glob
+            // and is not one - the glob is fine, the files are already gone.
+            // `cleanup` is the only post condition guaranteed to run last.
+            cleanup {
                 // Removed explicitly rather than relying on cleanWs, so a
                 // workspace left behind by an aborted build is not a leak.
                 sh 'rm -f .jenkins-settings.xml'
