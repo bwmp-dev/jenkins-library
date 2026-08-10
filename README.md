@@ -42,10 +42,17 @@ Everything is optional; a single-module plugin needs only `mavenPlugin()`.
 | `artifacts` | `**/target/*.jar` | what to archive |
 | `excludes` | `**/original-*.jar` | shade's pre-shading copy, never wanted |
 | `verify` | none | jar layout assertions, see below |
+| `discord` | `true` | set false to silence notifications for one repo |
+| `discordDevCredentials` | `discord-webhook-dev` | Secret text credential holding the snapshot-channel webhook URL |
+| `discordReleaseCredentials` | `discord-webhook-release` | Secret text credential holding the release-channel webhook URL |
 | `deploy` | `true` | set false for a plugin that should never publish |
 | `releaseBranch` | `main\|master` | branches that deploy snapshots |
 
 **JDK 25 is the default even though these emit Java 17 bytecode.** `--release 17` fixes the *output* version and the platform API; it does not lower the highest class file version javac will read off the classpath. paper-api 26.1.2 ships class file version 69 (Java 25), so a Java 21 compiler fails with `class file has wrong version 69.0, should be 65.0`.
+
+**Discord posts from `post { cleanup }`, not `post { always }`.** `always` runs *before* `success`, so a message sent there reports `SUCCESS` on a build that `archiveArtifacts` then fails — which has happened. `cleanup` is the only condition guaranteed to run last, so `currentBuild.currentResult` there matches what the user sees.
+
+Tag builds post to the release channel, builds on `main`/`master` post to the dev channel, and PR or feature-branch builds post nothing — they neither publish a snapshot nor cut a release. Notification failure is caught and logged: a missing webhook credential never turns a green build red, so the library is safe to roll out before the credentials exist.
 
 **Deploy targets come from here, not from `<distributionManagement>`.** They describe this Jenkins, not the source tree — only some of the plugins declare them, and `keystone-parent` deliberately must not, since consuming plugins inherit from it. The library passes `-DaltDeploymentRepository` instead, which overrides any pom that does declare one.
 

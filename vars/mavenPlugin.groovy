@@ -61,6 +61,13 @@ def call(Map config = [:]) {
     String repoServerId = config.get('repoServerId', 'nexus-site')
     String snapshotRepo = config.get('snapshotRepo', 'https://nexus.bwmp.dev/repository/maven-snapshots/')
     String releaseRepo  = config.get('releaseRepo',  'https://nexus.bwmp.dev/repository/maven-releases/')
+    // Two webhooks, not one: tag builds announce to the release channel and
+    // main-branch builds to the dev channel, so release announcements are not
+    // buried under snapshot traffic from ten repos. Both are Secret text
+    // credentials holding the webhook URL.
+    boolean notifyDiscord     = config.get('discord', true)
+    String discordDevCred     = config.get('discordDevCredentials', 'discord-webhook-dev')
+    String discordReleaseCred = config.get('discordReleaseCredentials', 'discord-webhook-release')
     String artifacts    = config.get('artifacts', '**/target/*.jar')
     String excludes     = config.get('excludes', '**/original-*.jar')
     Map    verify       = config.get('verify', null)
@@ -219,6 +226,136 @@ def call(Map config = [:]) {
             // and is not one - the glob is fine, the files are already gone.
             // `cleanup` is the only post condition guaranteed to run last.
             cleanup {
+                // Discord goes here rather than in `always` for the same
+                // reason. archiveArtifacts runs in `success`, AFTER `always` -
+                // so a notification sent from `always` would report SUCCESS on
+                // a build that archiving then failed. That is not theoretical;
+                // it is exactly what build #4 did. `cleanup` runs last, so
+                // currentBuild.currentResult here is the result the user sees.
+                script {
+                    String hook = null
+                    if (env.TAG_NAME) {
+                        hook = discordReleaseCred
+                    } else if (env.BRANCH_NAME ==~ /^(?:${releaseBranch})$/) {
+                        hook = discordDevCred
+                    }
+                    // PR and feature-branch builds deliberately stay silent:
+                    // they neither publish a snapshot nor cut a release, so
+                    // there is nothing to announce.
+
+                    // tokenize, not split('/')[1]: JOB_NAME is
+                    // "<org>/<repo>/<branch>" under an organisation folder, but
+                    // a plain multibranch job has fewer segments and indexing
+                    // blindly would throw. Second-from-last is the repo in both.
+                    List jobPath = env.JOB_NAME.tokenize('/')
+                    String repoName = jobPath.size() > 1 ? jobPath[-2] : jobPath[0]
+
+                    // Body text. Read from the workspace, which still exists
+                    // because cleanWs() runs after this - that ordering is load
+                    // bearing, not incidental.
+                    //
+                    // Both are best-effort and separately guarded: a build that
+                    // failed before checkout has no git history and no
+                    // CHANGELOG.md, and neither is a reason to lose the
+                    // notification that told you it failed.
+                    String body = ''
+                    if (notifyDiscord && hook) {
+                        try {
+                            if (env.TAG_NAME) {
+                                String ver = env.TAG_NAME.replaceFirst(/^v/, '')
+                                // The section for THIS version, not the whole
+                                // file. release-please writes
+                                // "## [1.0.2](...compare/v1.0.1...v1.0.2)", so
+                                // the heading for 1.0.2 also contains the
+                                // string 1.0.1 - a substring match would hand
+                                // you the wrong release's notes.
+                                //
+                                // The version is compared with ==, never
+                                // interpolated into a regex. An earlier draft
+                                // built the pattern "^## \\[?" ver "\\]?" and
+                                // it matched every heading: passing through
+                                // Groovy, then the shell, then awk's string
+                                // parser left a single backslash, awk read
+                                // "\[" as a plain "[", and the pattern became
+                                // an optional character class that matches any
+                                // "## " line. Three layers of escaping is not
+                                // worth defending - so only static regexes
+                                // appear below.
+                                body = sh(returnStdout: true, script: """
+                                    [ -f CHANGELOG.md ] || exit 0
+                                    awk -v ver="${ver}" '
+                                        /^## / {
+                                            if (found) exit
+                                            h = \$0
+                                            sub(/^## /, "", h)
+                                            sub(/^\\[/, "", h)
+                                            n = index(h, "]")
+                                            if (n == 0) n = index(h, " ")
+                                            v = (n > 0) ? substr(h, 1, n - 1) : h
+                                            if (v == ver) { found = 1; next }
+                                        }
+                                        found
+                                    ' CHANGELOG.md
+                                """).trim()
+                                // Fallback: newest section. A tag build has the
+                                // release at the top of the file anyway, so
+                                // this only matters if the heading format moves.
+                                if (!body) {
+                                    body = sh(returnStdout: true, script: """
+                                        [ -f CHANGELOG.md ] || exit 0
+                                        awk '/^## /{n++} n==1 && !/^## /' CHANGELOG.md
+                                    """).trim()
+                                }
+                            } else {
+                                body = sh(returnStdout: true,
+                                          script: 'git log -1 --pretty=format:%s%n%n%b').trim()
+                            }
+                        } catch (err) {
+                            echo "Could not read notification body: ${err.message}"
+                        }
+                        // Discord rejects an embed description over 4096
+                        // characters outright, so a long changelog would lose
+                        // the whole message rather than the tail of it.
+                        if (body.length() > 1500) {
+                            body = body.take(1500) + '\n…'
+                        }
+                    }
+
+                    if (notifyDiscord && hook) {
+                        // Never fail a build over a notification. A missing or
+                        // revoked webhook credential must not turn a green
+                        // build red - and because this is fail-soft, the
+                        // library can be rolled out before the credentials
+                        // exist rather than after.
+                        try {
+                            withCredentials([string(credentialsId: hook,
+                                                    variable: 'DISCORD_WEBHOOK')]) {
+                                discordSend(
+                                    webhookURL: env.DISCORD_WEBHOOK,
+                                    title: env.TAG_NAME
+                                        ? "${repoName} ${env.TAG_NAME} released"
+                                        : "${repoName} ${env.BRANCH_NAME} ${env.BUILD_DISPLAY_NAME}",
+                                    description: (env.TAG_NAME
+                                        ? "Published to ${releaseRepo}"
+                                        : "Snapshot from ${env.BRANCH_NAME}")
+                                        + (body ? "\n\n${body}" : ''),
+                                    link: env.BUILD_URL,
+                                    result: currentBuild.currentResult,
+                                    // Off for releases: the changelog above is
+                                    // the curated version of the same commits,
+                                    // and printing both says everything twice.
+                                    // On for dev, where a push can batch several
+                                    // commits and the body only shows the head.
+                                    showChangeset: !env.TAG_NAME,
+                                    enableArtifactsList: true,
+                                    customUsername: 'bwmp CI'
+                                )
+                            }
+                        } catch (err) {
+                            echo "Discord notification skipped: ${err.message}"
+                        }
+                    }
+                }
                 // Removed explicitly rather than relying on cleanWs, so a
                 // workspace left behind by an aborted build is not a leak.
                 sh 'rm -f .jenkins-settings.xml'
