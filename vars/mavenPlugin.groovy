@@ -5,7 +5,7 @@
  *
  *     @Library('bwmp') _
  *     mavenPlugin(
- *         jdk: 'Temurin Java 21',
+ *         jdk: 'Java 21',
  *         artifacts: 'sigil-plugin/target/Sigil-*.jar,sigil-api/target/sigil-api-*.jar',
  *         verify: [
  *             relocated: ['dev/bwmp/sigil/libs/keystone/', 'dev/bwmp/sigil/libs/kyori/'],
@@ -24,7 +24,20 @@ def call(Map config = [:]) {
     // JDK 21 rather than 17: these projects emit Java 17 bytecode via
     // --release, but compiling against paper-api 26.x needs a compiler new
     // enough to read its class files.
-    String jdkTool      = config.get('jdk', 'Temurin Java 21')
+    String jdkTool      = config.get('jdk', 'Java 21')
+    // The name of a Jenkins Maven tool. Defaults to the one configured on
+    // jenkins.luminescent.dev, whose name is its version number.
+    //
+    // A Jenkins tool is NOT on PATH automatically - the environment block below
+    // is what puts it there. Pass `maven: null` to instead use whatever `mvn`
+    // the agent already has on PATH; that is only safe if you know one is
+    // installed, and `mvn: not found` is the usual first-run failure otherwise.
+    //
+    // containsKey rather than config.get('maven', '3.8.1'): Groovy's two-arg
+    // Map.get substitutes the default when the VALUE is null, not only when the
+    // key is absent, which would silently ignore an explicit `maven: null` and
+    // make the escape hatch above a lie.
+    String mavenTool    = config.containsKey('maven') ? config.maven : '3.8.1'
     String nexusCredId  = config.get('nexusCredentials', 'nexus-deploy')
     String artifacts    = config.get('artifacts', '**/target/*.jar')
     String excludes     = config.get('excludes', '**/original-*.jar')
@@ -51,6 +64,9 @@ def call(Map config = [:]) {
 
         environment {
             MAVEN_ARGS = '-B -ntp -s .jenkins-settings.xml'
+            // Only resolves the tool when one was named; otherwise PATH is left
+            // exactly as the agent has it.
+            PATH = "${mavenTool ? tool(mavenTool) + '/bin:' : ''}${env.PATH}"
         }
 
         stages {

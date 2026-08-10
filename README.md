@@ -33,7 +33,8 @@ Everything is optional; a single-module plugin needs only `mavenPlugin()`.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `jdk` | `Temurin Java 21` | Jenkins JDK tool name |
+| `jdk` | `Java 21` | Jenkins JDK tool name |
+| `maven` | `3.8.1` | Jenkins Maven tool name; `null` to use `mvn` from the agent's PATH |
 | `nexusCredentials` | `nexus-deploy` | Jenkins credential ID for the Nexus deploy account |
 | `artifacts` | `**/target/*.jar` | what to archive |
 | `excludes` | `**/original-*.jar` | shade's pre-shading copy, never wanted |
