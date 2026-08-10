@@ -33,7 +33,7 @@ Everything is optional; a single-module plugin needs only `mavenPlugin()`.
 
 | Parameter | Default | Meaning |
 |---|---|---|
-| `jdk` | `Java 21` | Jenkins JDK tool name |
+| `jdk` | `Java 25` | Jenkins JDK tool name. Must be >= the newest class file version on the compile classpath — paper-api 26.x is Java 25 — regardless of the `--release` level the project targets. |
 | `maven` | `3.8.1` | Jenkins Maven tool name; `null` to use `mvn` from the agent's PATH |
 | `nexusCredentials` | `nexus-deploy` | Jenkins credential ID for the Nexus deploy account |
 | `artifacts` | `**/target/*.jar` | what to archive |

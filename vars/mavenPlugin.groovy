@@ -5,7 +5,7 @@
  *
  *     @Library('bwmp') _
  *     mavenPlugin(
- *         jdk: 'Java 21',
+ *         jdk: 'Java 25',
  *         artifacts: 'sigil-plugin/target/Sigil-*.jar,sigil-api/target/sigil-api-*.jar',
  *         verify: [
  *             relocated: ['dev/bwmp/sigil/libs/keystone/', 'dev/bwmp/sigil/libs/kyori/'],
@@ -21,10 +21,17 @@
 def call(Map config = [:]) {
 
     // ---- defaults ---------------------------------------------------------
-    // JDK 21 rather than 17: these projects emit Java 17 bytecode via
+    // JDK 25 rather than 17: these projects emit Java 17 bytecode via
     // --release, but compiling against paper-api 26.x needs a compiler new
-    // enough to read its class files.
-    String jdkTool      = config.get('jdk', 'Java 21')
+    // enough to READ its class files, and paper-api 26.1.2 ships class file
+    // version 69 (Java 25). --release only constrains the bytecode javac
+    // writes and the platform API it exposes; it does not lower the maximum
+    // class file version javac will accept off the classpath, so the compiler
+    // must be >= the newest dependency, independent of the target level.
+    //
+    // Symptom when this is too old: "bad class file ... paper-api-*.jar / class
+    // file has wrong version 69.0, should be 65.0" (65 = Java 21).
+    String jdkTool      = config.get('jdk', 'Java 25')
     // The name of a Jenkins Maven tool. Defaults to the one configured on
     // jenkins.luminescent.dev, whose name is its version number.
     //
