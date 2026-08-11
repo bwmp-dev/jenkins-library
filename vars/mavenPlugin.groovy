@@ -65,6 +65,10 @@ def call(Map config = [:]) {
     // main-branch builds to the dev channel, so release announcements are not
     // buried under snapshot traffic from ten repos. Both are Secret text
     // credentials holding the webhook URL.
+    // Modrinth publishing is opt-in per repo: absent projectId, the stage is
+    // skipped entirely. Keystone in particular must never appear there - it is
+    // a library shaded into its consumers, not a plugin anyone installs.
+    Map    modrinth           = config.get('modrinth', [:])
     boolean notifyDiscord     = config.get('discord', true)
     String discordDevCred     = config.get('discordDevCredentials', 'discord-webhook-dev')
     String discordReleaseCred = config.get('discordReleaseCredentials', 'discord-webhook-release')
@@ -200,6 +204,28 @@ def call(Map config = [:]) {
                     }
                 }
             }
+
+            // After the Maven deploy, not before. If Modrinth rejects the
+            // upload the build goes red, but the artifact is already in Nexus
+            // and every consumer can resolve it - the failure costs you a
+            // storefront listing, not the release.
+            stage('Publish to Modrinth') {
+                when {
+                    allOf {
+                        buildingTag()
+                        expression { modrinth?.projectId }
+                    }
+                }
+                steps {
+                    script {
+                        publishModrinth(modrinth + [
+                            versionNumber: env.TAG_NAME.replaceFirst(/^v/, ''),
+                            file:          modrinth.get('file', verify?.jar),
+                            changelog:     releaseNotes(env.TAG_NAME)
+                        ])
+                    }
+                }
+            }
         }
 
         post {
@@ -262,50 +288,9 @@ def call(Map config = [:]) {
                     if (notifyDiscord && hook) {
                         try {
                             if (env.TAG_NAME) {
-                                String ver = env.TAG_NAME.replaceFirst(/^v/, '')
-                                // The section for THIS version, not the whole
-                                // file. release-please writes
-                                // "## [1.0.2](...compare/v1.0.1...v1.0.2)", so
-                                // the heading for 1.0.2 also contains the
-                                // string 1.0.1 - a substring match would hand
-                                // you the wrong release's notes.
-                                //
-                                // The version is compared with ==, never
-                                // interpolated into a regex. An earlier draft
-                                // built the pattern "^## \\[?" ver "\\]?" and
-                                // it matched every heading: passing through
-                                // Groovy, then the shell, then awk's string
-                                // parser left a single backslash, awk read
-                                // "\[" as a plain "[", and the pattern became
-                                // an optional character class that matches any
-                                // "## " line. Three layers of escaping is not
-                                // worth defending - so only static regexes
-                                // appear below.
-                                body = sh(returnStdout: true, script: """
-                                    [ -f CHANGELOG.md ] || exit 0
-                                    awk -v ver="${ver}" '
-                                        /^## / {
-                                            if (found) exit
-                                            h = \$0
-                                            sub(/^## /, "", h)
-                                            sub(/^\\[/, "", h)
-                                            n = index(h, "]")
-                                            if (n == 0) n = index(h, " ")
-                                            v = (n > 0) ? substr(h, 1, n - 1) : h
-                                            if (v == ver) { found = 1; next }
-                                        }
-                                        found
-                                    ' CHANGELOG.md
-                                """).trim()
-                                // Fallback: newest section. A tag build has the
-                                // release at the top of the file anyway, so
-                                // this only matters if the heading format moves.
-                                if (!body) {
-                                    body = sh(returnStdout: true, script: """
-                                        [ -f CHANGELOG.md ] || exit 0
-                                        awk '/^## /{n++} n==1 && !/^## /' CHANGELOG.md
-                                    """).trim()
-                                }
+                                // The same notes Modrinth publishes, resolved
+                                // in one place - see vars/releaseNotes.groovy.
+                                body = releaseNotes(env.TAG_NAME)
                             } else {
                                 body = sh(returnStdout: true,
                                           script: 'git log -1 --pretty=format:%s%n%n%b').trim()

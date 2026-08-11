@@ -42,6 +42,7 @@ Everything is optional; a single-module plugin needs only `mavenPlugin()`.
 | `artifacts` | `**/target/*.jar` | what to archive |
 | `excludes` | `**/original-*.jar` | shade's pre-shading copy, never wanted |
 | `verify` | none | jar layout assertions, see below |
+| `modrinth` | none | publish tag builds to Modrinth, see below |
 | `discord` | `true` | set false to silence notifications for one repo |
 | `discordDevCredentials` | `discord-webhook-dev` | Secret text credential holding the snapshot-channel webhook URL |
 | `discordReleaseCredentials` | `discord-webhook-release` | Secret text credential holding the release-channel webhook URL |
@@ -49,6 +50,46 @@ Everything is optional; a single-module plugin needs only `mavenPlugin()`.
 | `releaseBranch` | `main\|master` | branches that deploy snapshots |
 
 **JDK 25 is the default even though these emit Java 17 bytecode.** `--release 17` fixes the *output* version and the platform API; it does not lower the highest class file version javac will read off the classpath. paper-api 26.1.2 ships class file version 69 (Java 25), so a Java 21 compiler fails with `class file has wrong version 69.0, should be 65.0`.
+
+## Modrinth
+
+Opt-in per repo. Omit `modrinth` and the stage never runs — which is the right
+setting for Keystone, a library shaded into its consumers rather than a plugin
+anyone installs.
+
+```groovy
+mavenPlugin(
+    verify: [ jar: 'sigil-plugin/target/Sigil-*.jar', /* ... */ ],
+    modrinth: [
+        projectId:    'sigil',                                        // slug or id
+        loaders:      ['bukkit', 'spigot', 'paper', 'purpur', 'folia'],
+        gameVersions: ['1.21.4', '1.21.5', '1.21.6'],
+        // file: defaults to verify.jar, so it is usually redundant
+    ]
+)
+```
+
+Only **tag** builds publish, and always as `version_type: release` — snapshots
+off `main` never reach Modrinth. The version number is the tag with any leading
+`v` stripped, and the changelog is that version's section of `CHANGELOG.md`, the
+same text the Discord release embed uses.
+
+`gameVersions` is an explicit list on purpose. Modrinth's tag API could expand a
+minimum version into "everything newer", but claiming support for a Minecraft
+version the moment it exists is a claim you have not tested — this way widening
+support stays a deliberate edit.
+
+Needs a **Secret text** credential `modrinth-token` (override with
+`credentials:`) holding a PAT with the `VERSION_CREATE` scope. Modrinth wants the
+raw token in `Authorization`, not a `Bearer` prefix, and requires a
+uniquely-identifying `User-Agent`; both are handled in `publishModrinth`.
+
+Re-running an already-published tag is a no-op: the existing version is detected
+and the upload skipped, rather than failing on Modrinth's duplicate-version 400.
+
+The project must already exist on Modrinth. New projects are created by hand and
+are not publicly visible until they pass review, so this publishes versions — it
+does not onboard a plugin.
 
 **Discord posts from `post { cleanup }`, not `post { always }`.** `always` runs *before* `success`, so a message sent there reports `SUCCESS` on a build that `archiveArtifacts` then fails — which has happened. `cleanup` is the only condition guaranteed to run last, so `currentBuild.currentResult` there matches what the user sees.
 
