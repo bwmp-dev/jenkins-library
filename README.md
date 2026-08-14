@@ -41,6 +41,7 @@ Everything is optional; a single-module plugin needs only `mavenPlugin()`.
 | `releaseRepo` | `.../maven-releases/` | release deploy URL, passed as `altDeploymentRepository` |
 | `artifacts` | `**/target/*.jar` | what to archive |
 | `excludes` | `**/original-*.jar` | shade's pre-shading copy, never wanted |
+| `downloads` | `verify.jar` | user-facing artifacts linked in Discord; comma-separated, or `null` for none |
 | `verify` | none | jar layout assertions, see below |
 | `modrinth` | none | publish tag builds to Modrinth, see below |
 | `discord` | `true` | set false to silence notifications for one repo |

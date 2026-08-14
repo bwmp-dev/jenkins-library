@@ -75,6 +75,7 @@ def call(Map config = [:]) {
     String artifacts    = config.get('artifacts', '**/target/*.jar')
     String excludes     = config.get('excludes', '**/original-*.jar')
     Map    verify       = config.get('verify', null)
+    String downloads    = config.containsKey('downloads') ? config.downloads : verify?.jar
     boolean deploy      = config.get('deploy', true)
     String releaseBranch = config.get('releaseBranch', 'main|master')
 
@@ -285,6 +286,22 @@ def call(Map config = [:]) {
                     // CHANGELOG.md, and neither is a reason to lose the
                     // notification that told you it failed.
                     String body = ''
+                    List<String> downloadLinks = []
+                    if (currentBuild.currentResult == 'SUCCESS' && downloads) {
+                        downloads.tokenize(',').each { String pattern ->
+                            String safePattern = pattern.trim().replace("'", "'\"'\"'")
+                            String matches = sh(
+                                returnStdout: true,
+                                script: "find . -type f -path './${safePattern}' -print"
+                            ).trim()
+                            matches.readLines().findAll { it }.each { String match ->
+                                String path = match.replaceFirst(/^\.\//, '')
+                                String name = path.tokenize('/')[-1]
+                                downloadLinks << "[${name}](${env.BUILD_URL}artifact/${path})"
+                            }
+                        }
+                    }
+
                     if (notifyDiscord && hook) {
                         try {
                             if (env.TAG_NAME) {
@@ -315,15 +332,23 @@ def call(Map config = [:]) {
                         try {
                             withCredentials([string(credentialsId: hook,
                                                     variable: 'DISCORD_WEBHOOK')]) {
+                                boolean failed = currentBuild.currentResult == 'FAILURE'
+                                String description = (failed
+                                    ? '**BUILD FAILURE**'
+                                    : (env.TAG_NAME
+                                        ? "Published to ${releaseRepo}"
+                                        : "Snapshot from ${env.BRANCH_NAME}"))
+                                    + (downloadLinks ? "\n\n**Downloads:** ${downloadLinks.join(', ')}" : '')
+                                    + (body ? "\n\n${body}" : '')
                                 discordSend(
                                     webhookURL: env.DISCORD_WEBHOOK,
-                                    title: env.TAG_NAME
+                                    title: failed
+                                        ? "BUILD FAILED — ${repoName} ${env.BRANCH_NAME} ${env.BUILD_DISPLAY_NAME}"
+                                        : env.TAG_NAME
                                         ? "${repoName} ${env.TAG_NAME} released"
                                         : "${repoName} ${env.BRANCH_NAME} ${env.BUILD_DISPLAY_NAME}",
-                                    description: (env.TAG_NAME
-                                        ? "Published to ${releaseRepo}"
-                                        : "Snapshot from ${env.BRANCH_NAME}")
-                                        + (body ? "\n\n${body}" : ''),
+                                    description: description,
+                                    notes: failed ? '<@798738506859282482> Jenkins build failure' : '',
                                     link: env.BUILD_URL,
                                     result: currentBuild.currentResult,
                                     // Off for releases: the changelog above is
@@ -332,7 +357,7 @@ def call(Map config = [:]) {
                                     // On for dev, where a push can batch several
                                     // commits and the body only shows the head.
                                     showChangeset: !env.TAG_NAME,
-                                    enableArtifactsList: true,
+                                    enableArtifactsList: false,
                                     customUsername: 'bwmp CI'
                                 )
                             }
